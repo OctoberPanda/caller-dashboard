@@ -139,7 +139,7 @@ function initApp(){
   // Show write-back status in topbar
   const wb=document.getElementById('writeback-status');
   if(wb){
-    if(config.oauthToken){ wb.textContent='✓ Write-back on'; wb.style.color='var(--green)'; }
+    if(config.sheetId){ wb.textContent='✓ Write-back on'; wb.style.color='var(--green)'; }
     else{ wb.textContent='Read only'; wb.style.color='var(--text3)'; }
   }
   loadSheet();
@@ -645,54 +645,7 @@ async function getSheetTabId(){
 }
 
 async function strikethroughPhone(ri, phoneColIndex, fullPhoneCell, badPhone){
-  if(!config.oauthToken||!config.sheetId) return;
-  const cellValue=String(fullPhoneCell||'');
-  if(!cellValue) return;
-
-  // Find start and end character positions of the bad number
-  const start=cellValue.indexOf(badPhone);
-  if(start===-1) return;
-  const end=start+badPhone.length;
-
-  // Build TextFormatRuns — strikethrough the bad number, normal for the rest
-  const runs=[];
-  if(start>0) runs.push({startIndex:0, format:{strikethrough:false}});
-  runs.push({startIndex:start, format:{strikethrough:true}});
-  if(end<cellValue.length) runs.push({startIndex:end, format:{strikethrough:false}});
-
-  const sheetTabId=await getSheetTabId();
-  const sheetRow=ri-1;
-  const sheetCol=phoneColIndex;
-
-  try{
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${config.sheetId}:batchUpdate`,
-      {
-        method:'POST',
-        headers:{'Authorization':`Bearer ${config.oauthToken}`,'Content-Type':'application/json'},
-        body:JSON.stringify({
-          requests:[{
-            updateCells:{
-              rows:[{
-                values:[{
-                  userEnteredValue:{stringValue:cellValue},
-                  textFormatRuns:runs
-                }]
-              }],
-              fields:'userEnteredValue,textFormatRuns',
-              range:{
-                sheetId:sheetTabId,
-                startRowIndex:sheetRow,
-                endRowIndex:sheetRow+1,
-                startColumnIndex:sheetCol,
-                endColumnIndex:sheetCol+1
-              }
-            }
-          }]
-        })
-      }
-    );
-  }catch(e){ console.error('Strikethrough error',e); }
+  // Strikethrough handled manually in sheet — bad number flagged in notes
 }
 
 // ── UNDO FLAG ────────────────────────────
@@ -906,42 +859,32 @@ async function deleteAllToday(ri, role){
 
 // ── SHEET WRITE HELPERS ──────────────────
 async function writeLeadToSheet(ri, role, bank){
-  if(!config.oauthToken) return;
   const c=CD[role], d=bank.data;
-  const writes=[
-    {col:c.recentCall, val:d[c.recentCall]||''},
-    {col:c.times,      val:d[c.times]||'0'},
-    {col:c.outcome,    val:d[c.outcome]||''},
-    {col:c.who,        val:d[c.who]||''},
-    {col:c.notes,      val:d[c.notes]||''},
+  const updates=[
+    {row:ri, col:c.recentCall, value:d[c.recentCall]||''},
+    {row:ri, col:c.times,      value:d[c.times]||'0'},
+    {row:ri, col:c.outcome,    value:d[c.outcome]||''},
+    {row:ri, col:c.who,        value:d[c.who]||''},
+    {row:ri, col:c.notes,      value:d[c.notes]||''},
   ];
-  for(const w of writes) await writeCell(ri, w.col, w.val);
+  await writeCells(updates);
 }
 
+const APPS_SCRIPT_URL='https://script.google.com/macros/s/AKfycbyIO-ftDqnJWc-0sYmyI7Y7gnDFWInt3yehIwCJAavn1T-eEFzt5hQfx2WRllXViXphqA/exec';
+
 async function writeCell(ri, colIndex, value){
-  if(!config.oauthToken){ console.log('No OAuth token'); return; }
-  const cellRef=`'${config.tabName}'!${colToLetter(colIndex)}${ri}`;
+  return writeCells([{row:ri, col:colIndex, value:value}]);
+}
+
+async function writeCells(updates){
   try{
-    const res=await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${config.sheetId}/values/${encodeURIComponent(cellRef)}?valueInputOption=USER_ENTERED`,
-      { method:'PUT',
-        headers:{'Authorization':`Bearer ${config.oauthToken}`,'Content-Type':'application/json'},
-        body:JSON.stringify({range:cellRef, majorDimension:'ROWS', values:[[value]]})
-      }
-    );
-    const data=await res.json();
-    if(data.error){
-      console.error('Sheet write error:',data.error.message);
-      if(data.error.code===401){
-        // Token expired — prompt re-login
-        config.oauthToken=null;
-        saveConfig();
-        toast('Session expired — please sign in again in ⚙️ Settings','error');
-      } else {
-        toast('Sheet update failed: '+data.error.message,'error');
-      }
-    }
-  }catch(e){ console.error('Sheet write error',e); }
+    await fetch(APPS_SCRIPT_URL,{
+      method:'POST',
+      mode:'no-cors',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({sheetId:config.sheetId, tabName:config.tabName, updates:updates})
+    });
+  }catch(e){ console.error('Write error',e); }
 }
 
 function flagForTressika(){
