@@ -280,7 +280,8 @@ function getBadNumberIssue(ri,role,phone){
   const bank=banks.find(b=>b._rowIndex===ri);
   if(!bank) return '';
   const notes=bank.data[CD[role].notes]||'';
-  const match=notes.match(new RegExp(`BAD NUMBER: ${phone.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')} — ([^.]+)`));
+  const escapedPhone=phone.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const match=notes.match(new RegExp(escapedPhone+' — ([^.\\n|]+)'));
   return match?match[1].trim():'Bad number';
 }
 // Stored separately from call logs
@@ -298,7 +299,7 @@ function isPhoneFlagged(ri,role,phone){
   const bank=banks.find(b=>b._rowIndex===ri);
   if(!bank) return false;
   const notes=bank.data[CD[role].notes]||'';
-  return notes.includes(`⚠️ BAD NUMBER: ${phone}`) || notes.includes(`BAD NUMBER: ${phone}`);
+  return notes.includes(phone+' —')||notes.includes(phone+' — ');
 }
 
 // ── STATS ────────────────────────────────
@@ -561,27 +562,122 @@ async function saveFlagEntry(){
   if(!currentModal||currentModal.type!=='flag') return;
   const {rowIndex:ri, role, phone}=currentModal;
   const issue=gv('log-flag-issue');
-  const ts=formatDateTime(new Date());
-  const noteEntry=`${ts} [${role}] ⚠️ BAD NUMBER: ${phone} — ${issue}. Flagged for update.`;
+  const now=new Date();
+  const ts=formatDateTime(now);
+  const todayDate=formatDate(now);
+  const timeOnly=now.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})+' ET';
+
+  const recentLog=(todayLogs[ri]||[]).filter(l=>l.role===role&&!l.deleted).slice(-1)[0];
+  const badNumberNote=`${phone} — ${issue}`;
+  let noteEntry;
+
+  if(recentLog&&recentLog.noteEntry){
+    // Append to existing note — no extra timestamp at all
+    recentLog.noteEntry=recentLog.noteEntry.replace(/\.$/, '')+` | ${badNumberNote}.`;
+    noteEntry=recentLog.noteEntry;
+    saveTodayLogs();
+  } else {
+    // Standalone — check if date already in sheet notes
+    const bank0=banks.find(b=>b._rowIndex===ri);
+    const existingN=bank0?.data[CD[role].notes]||'';
+    const dateInNotes=existingN.includes(todayDate);
+    const tsPrefix=dateInNotes?timeOnly:`${todayDate} — ${timeOnly}`;
+    noteEntry=`${tsPrefix} — ${badNumberNote}.`;
+  }
 
   const flags=getFlagsForRole(ri,role);
-  const flagObj={phone, issue, ts, noteEntry, undone:false, id:genId()};
+  const flagObj={phone, issue, ts, noteEntry:badNumberNote, undone:false, id:genId()};
   flags.push(flagObj);
   saveFlagsForRole(ri,role,flags);
 
-  // Write to sheet — append to notes
   const bank=banks.find(b=>b._rowIndex===ri);
   if(bank){
     const c=CD[role];
-    const existing=bank.data[c.notes]||'';
-    bank.data[c.notes]=existing?existing+'\n'+noteEntry:noteEntry;
+    // If we updated an existing note, rebuild the full notes from scratch
+    if(recentLog){
+      const allNotes=(bank.data[c.notes]||'').split('\n');
+      // Find and replace the old note line with the updated one
+      const updated=allNotes.map(line=>
+        line.includes(recentLog.timestamp)?recentLog.noteEntry:line
+      ).join('\n');
+      bank.data[c.notes]=updated;
+    } else {
+      const existing=bank.data[c.notes]||'';
+      bank.data[c.notes]=existing?existing+'\n'+noteEntry:noteEntry;
+    }
     await writeCell(ri, c.notes, bank.data[c.notes]);
+    await strikethroughPhone(ri, c.phone, bank.data[c.phone]||'', phone);
   }
 
   renderStats();
   closeModal();
   if(openCardRI===ri) renderLeadsGrid(ri);
-  toast('Number flagged ⚠️','error');
+  toast('Number flagged','success');
+}
+
+let cachedSheetTabId = 0; // default to first sheet
+
+async function getSheetTabId(){
+  if(cachedSheetTabId!==0) return cachedSheetTabId;
+  try{
+    const url=`https://sheets.googleapis.com/v4/spreadsheets/${config.sheetId}?key=${config.apiKey}`;
+    const res=await fetch(url);
+    const data=await res.json();
+    const sheet=data.sheets?.find(s=>s.properties.title===config.tabName);
+    if(sheet) cachedSheetTabId=sheet.properties.sheetId;
+  }catch(e){ console.error('Sheet tab ID error',e); }
+  return cachedSheetTabId;
+}
+
+async function strikethroughPhone(ri, phoneColIndex, fullPhoneCell, badPhone){
+  if(!config.oauthToken||!config.sheetId) return;
+  const cellValue=String(fullPhoneCell||'');
+  if(!cellValue) return;
+
+  // Find start and end character positions of the bad number
+  const start=cellValue.indexOf(badPhone);
+  if(start===-1) return;
+  const end=start+badPhone.length;
+
+  // Build TextFormatRuns — strikethrough the bad number, normal for the rest
+  const runs=[];
+  if(start>0) runs.push({startIndex:0, format:{strikethrough:false}});
+  runs.push({startIndex:start, format:{strikethrough:true}});
+  if(end<cellValue.length) runs.push({startIndex:end, format:{strikethrough:false}});
+
+  const sheetTabId=await getSheetTabId();
+  const sheetRow=ri-1;
+  const sheetCol=phoneColIndex;
+
+  try{
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.sheetId}:batchUpdate`,
+      {
+        method:'POST',
+        headers:{'Authorization':`Bearer ${config.oauthToken}`,'Content-Type':'application/json'},
+        body:JSON.stringify({
+          requests:[{
+            updateCells:{
+              rows:[{
+                values:[{
+                  userEnteredValue:{stringValue:cellValue},
+                  textFormatRuns:runs
+                }]
+              }],
+              fields:'userEnteredValue,textFormatRuns',
+              range:{
+                sheetId:sheetTabId,
+                startRowIndex:sheetRow,
+                endRowIndex:sheetRow+1,
+                startColumnIndex:sheetCol,
+                endColumnIndex:sheetCol+1
+              }
+            }
+          }]
+        })
+      }
+    );
+  }catch(e){ console.error('Strikethrough error',e); }
 }
 
 // ── UNDO FLAG ────────────────────────────
@@ -608,16 +704,14 @@ async function undoFlag(ri, role, phone){
 
 // ── LOG MODAL ────────────────────────────
 function openLogModal(ri, role, phoneIndex){
-  currentModal={type:'log', rowIndex:ri, role, phoneIndex};
+  currentModal={type:'log', rowIndex:ri, role, phoneIndex:null}; // no phone index
   const bank=banks.find(b=>b._rowIndex===ri);
   if(!bank) return;
   const d=bank.data, c=CD[role];
-  const phones=parsePhones(d[c.phone]);
-  const phone=phones[phoneIndex]||'';
   const name=d[c.name]||'—';
 
   setText('modal-title', d[COL.BANK_NAME]);
-  setText('modal-sub',   `Row ${ri} · ${role}: ${name}${phone?' · '+phone:''}`);
+  setText('modal-sub',   `Row ${ri} · ${role}: ${name}`); // no number shown
 
   const whoSel=document.getElementById('log-who-answered');
   whoSel.innerHTML=WHO_OPTIONS.map(o=>`<option value="${o}">${o}</option>`).join('');
@@ -670,11 +764,23 @@ async function saveCallLog(){
   const ts=formatDateTime(new Date());
   const id=genId();
 
-  let noteEntry=`${ts} [${role}${phone?' – '+phone:''}] Who: ${who}. Outcome: ${outcome}.`;
-  if(notesTxt) noteEntry+=` ${notesTxt}`;
-  if(spokeTo)  noteEntry+=` Spoke to: ${spokeTo}.`;
-  if(newNum)   noteEntry+=` New #: ${newNum}.`;
-  if(outcome==='Decline') noteEntry+=` 🚫 DECLINED — all calling stopped at this bank.`;
+  // Date shows once per day — subsequent entries just show time
+  const now=new Date();
+  const todayDate=formatDate(now);
+  const timeOnly=now.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})+' ET';
+  const existingNotes=d[c.notes]||'';
+  const dateAlreadyInNotes=existingNotes.includes(todayDate);
+  const tsPrefix=dateAlreadyInNotes?timeOnly:`${todayDate} — ${timeOnly}`;
+
+  // Notes only contain what the rep typed — outcome goes in its own column
+  let noteEntry='';
+  const noteParts=[];
+  if(notesTxt) noteParts.push(notesTxt);
+  if(spokeTo)  noteParts.push(`Spoke to: ${spokeTo}`);
+  if(newNum)   noteParts.push(`New number: ${newNum}`);
+  if(outcome==='Decline') noteParts.push(`DECLINED — all calling stopped`);
+  if(noteParts.length) noteEntry=`${tsPrefix} — ${noteParts.join('. ')}.`;
+  else noteEntry=`${tsPrefix}.`;
 
   const logEntry={id, rowIndex:ri, role, phoneIndex, phone, who, outcome,
     noteEntry, spokeTo, newNum, timestamp:ts, forTressika:false, deleted:false};
@@ -695,7 +801,7 @@ async function saveCallLog(){
   if(outcome==='Decline'){
     ['CEO','CRA','CFO'].filter(r=>r!==role).forEach(r=>{
       const dc=CD[r];
-      const dn=`${ts} [AUTO] Bank declined by ${role} — calling stopped.`;
+      const dn=`${ts} — DECLINED by ${role} — calling stopped.`;
       d[dc.notes]=(d[dc.notes]||'')+'\n'+dn;
     });
   }
@@ -1010,10 +1116,21 @@ function gv(id)      { return document.getElementById(id)?.value||''; }
 function setVal(id,v){ const el=document.getElementById(id); if(el) el.value=v||''; }
 function setText(id,v){ const el=document.getElementById(id); if(el) el.textContent=v; }
 function esc(s)      { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function colToLetter(i){ let r='',n=i+1; while(n>0){const m=(n-1)%26;r=String.fromCharCode(65+m)+r;n=Math.floor((n-1)/26);} return r; }
-function formatDate(d){ return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`; }
-function formatDateLong(d){ return d.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}); }
-function formatDateTime(d){ return `${formatDate(d)} ${d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}`; }
+// ── TIMEZONE ─────────────────────────────
+function formatDateET(d){
+  return d.toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'numeric'});
+}
+function formatDateLongET(d){
+  return d.toLocaleDateString('en-US',{timeZone:'America/New_York',month:'long',day:'numeric',year:'numeric'});
+}
+function formatDateTimeET(d){
+  const date=d.toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'numeric'});
+  const time=d.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'});
+  return `${date} ${time} ET`;
+}
+function formatDate(d){ return d.toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'numeric'}); }
+function formatDateLong(d){ return formatDateLongET(d); }
+function formatDateTime(d){ return formatDateTimeET(d); }
 function fmtD(v){ if(!v)return''; try{const d=new Date(v);return isNaN(d)?String(v):`${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`;}catch{return String(v);} }
 function toast(msg,type=''){
   const el=document.getElementById('toast');
