@@ -77,6 +77,17 @@ const OUTCOME_COLOR = {
   'Not the bank\'s fund type':'red','Left Message':'blue',
 };
 
+// ── EMERGENCY RESET ─────────────────────
+// If URL contains ?reset, wipe logs and redirect cleanly
+(function(){
+  if(window.location.search.includes('reset')){
+    const cfg=localStorage.getItem('caller_dashboard_config');
+    localStorage.clear();
+    if(cfg) localStorage.setItem('caller_dashboard_config',cfg);
+    window.location.href=window.location.pathname;
+  }
+})();
+
 // ── INIT ────────────────────────────────
 window.onload = () => {
   config    = loadConfig();
