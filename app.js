@@ -572,17 +572,16 @@ async function saveFlagEntry(){
   let noteEntry;
 
   if(recentLog&&recentLog.noteEntry){
-    // Append to existing note — no extra timestamp at all
+    // Append to existing note — no extra date/time
     recentLog.noteEntry=recentLog.noteEntry.replace(/\.$/, '')+` | ${badNumberNote}.`;
     noteEntry=recentLog.noteEntry;
     saveTodayLogs();
   } else {
-    // Standalone — check if date already in sheet notes
+    // Standalone — date only if not already in notes
     const bank0=banks.find(b=>b._rowIndex===ri);
     const existingN=bank0?.data[CD[role].notes]||'';
     const dateInNotes=existingN.includes(todayDate);
-    const tsPrefix=dateInNotes?timeOnly:`${todayDate} — ${timeOnly}`;
-    noteEntry=`${tsPrefix} — ${badNumberNote}.`;
+    noteEntry=dateInNotes?`${badNumberNote}.`:`${todayDate} — ${badNumberNote}.`;
   }
 
   const flags=getFlagsForRole(ri,role);
@@ -761,26 +760,28 @@ async function saveCallLog(){
   const d=bank.data, c=CD[role];
   const phones=parsePhones(d[c.phone]);
   const phone=phones[phoneIndex]||'';
-  const ts=formatDateTime(new Date());
   const id=genId();
-
-  // Date shows once per day — subsequent entries just show time
   const now=new Date();
+  const ts=formatDateTime(now);
   const todayDate=formatDate(now);
-  const timeOnly=now.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})+' ET';
+
+  // Notes: date appears once, then just free text on subsequent entries
   const existingNotes=d[c.notes]||'';
   const dateAlreadyInNotes=existingNotes.includes(todayDate);
-  const tsPrefix=dateAlreadyInNotes?timeOnly:`${todayDate} — ${timeOnly}`;
 
-  // Notes only contain what the rep typed — outcome goes in its own column
+  // Only put free text in notes — outcome, who answered go to their own columns
   let noteEntry='';
   const noteParts=[];
   if(notesTxt) noteParts.push(notesTxt);
   if(spokeTo)  noteParts.push(`Spoke to: ${spokeTo}`);
   if(newNum)   noteParts.push(`New number: ${newNum}`);
   if(outcome==='Decline') noteParts.push(`DECLINED — all calling stopped`);
-  if(noteParts.length) noteEntry=`${tsPrefix} — ${noteParts.join('. ')}.`;
-  else noteEntry=`${tsPrefix}.`;
+
+  if(noteParts.length){
+    const prefix=dateAlreadyInNotes?'':`${todayDate} — `;
+    noteEntry=`${prefix}${noteParts.join('. ')}.`;
+  }
+  // If nothing to write to notes, don't create an empty entry
 
   const logEntry={id, rowIndex:ri, role, phoneIndex, phone, who, outcome,
     noteEntry, spokeTo, newNum, timestamp:ts, forTressika:false, deleted:false};
@@ -790,8 +791,11 @@ async function saveCallLog(){
   saveTodayLogs();
 
   // Update local bank data
-  const existing=d[c.notes]||'';
-  d[c.notes]     =existing?existing+'\n'+noteEntry:noteEntry;
+  // Only update notes if there's something to write
+  if(noteEntry){
+    const existing=d[c.notes]||'';
+    d[c.notes]=existing?existing+'\n'+noteEntry:noteEntry;
+  }
   d[c.recentCall]=TODAY_STR;
   d[c.times]     =String((parseInt(d[c.times])||0)+1);
   d[c.outcome]   =outcome;
@@ -801,7 +805,7 @@ async function saveCallLog(){
   if(outcome==='Decline'){
     ['CEO','CRA','CFO'].filter(r=>r!==role).forEach(r=>{
       const dc=CD[r];
-      const dn=`${ts} — DECLINED by ${role} — calling stopped.`;
+      const dn=`${todayDate} — DECLINED.`;
       d[dc.notes]=(d[dc.notes]||'')+'\n'+dn;
     });
   }
