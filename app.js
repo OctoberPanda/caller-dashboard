@@ -77,6 +77,8 @@ const OUTCOME_COLOR = {
   'Not the bank\'s fund type':'red','Left Message':'blue',
 };
 
+const SESSION_ID = Date.now().toString(36);
+
 // ── EMERGENCY RESET ─────────────────────
 // If URL contains ?reset, wipe logs and redirect cleanly
 (function(){
@@ -134,6 +136,12 @@ function saveSetup(){
 function initApp(){
   setText('rep-name-badge', config.repName||'Rep');
   setText('today-date', formatDateLong(TODAY));
+  // Show write-back status in topbar
+  const wb=document.getElementById('writeback-status');
+  if(wb){
+    if(config.oauthToken){ wb.textContent='✓ Write-back on'; wb.style.color='var(--green)'; }
+    else{ wb.textContent='Read only'; wb.style.color='var(--text3)'; }
+  }
   loadSheet();
   clearInterval(refreshTimer);
   refreshTimer=setInterval(silentRefresh, 5*60*1000);
@@ -977,7 +985,17 @@ function skipAuth(){ showScreen('main-app'); initApp(); }
 function checkOAuthCallback(){
   if(window.location.hash.includes('access_token')){
     const p=new URLSearchParams(window.location.hash.substring(1));
-    config.oauthToken=p.get('access_token'); saveConfig(); window.location.hash='';
+    const token=p.get('access_token');
+    if(token){
+      config=loadConfig(); // reload config fresh
+      config.oauthToken=token;
+      saveConfig();
+      // Clear hash without reload
+      history.replaceState(null,'',window.location.pathname+window.location.search);
+      // Show main app with token active
+      showScreen('main-app');
+      initApp();
+    }
   }
 }
 
@@ -1008,13 +1026,21 @@ function loadTodayLogs(){
   try{
     const s=JSON.parse(localStorage.getItem(LOGS_KEY))||{};
     const today=formatDate(new Date());
+    // New day — auto clear
     if(s._date!==today){
-      // New day — auto clear
-      const fresh={_date:today};
+      const fresh={_date:today, _session:SESSION_ID};
       localStorage.setItem(LOGS_KEY,JSON.stringify(fresh));
       return fresh;
     }
+    // Same day but different session — clear logs but keep date
+    if(s._session && s._session!==SESSION_ID){
+      const fresh={_date:today, _session:SESSION_ID};
+      localStorage.setItem(LOGS_KEY,JSON.stringify(fresh));
+      return fresh;
+    }
+    // Same session — return as is
+    s._session=SESSION_ID;
     return s;
-  }catch{ return{_date:formatDate(new Date())}; }
+  }catch{ return{_date:formatDate(new Date()),_session:SESSION_ID}; }
 }
 function saveTodayLogs(){ todayLogs._date=formatDate(new Date()); localStorage.setItem(LOGS_KEY,JSON.stringify(todayLogs)); }
