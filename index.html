@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Caller Dashboard</title>
+<!-- v5.1 -->
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- SETUP -->
+<div id="setup-screen" class="screen">
+  <div class="setup-card">
+    <div class="setup-logo">📞</div>
+    <h1>Caller Dashboard</h1>
+    <p class="setup-sub">Connect your Google Sheet to get started</p>
+    <div class="form-group"><label>Your name</label><input type="text" id="setup-rep-name" placeholder="e.g. Leon Godwin"/></div>
+    <div class="form-group"><label>Google Sheet ID</label><input type="text" id="setup-sheet-id" placeholder="Paste your Sheet ID"/><span class="form-hint">Found in the sheet URL between /d/ and /edit</span></div>
+    <div class="form-group"><label>Tab name</label><input type="text" id="setup-tab-name" placeholder="e.g. Leon Outreach Tracker"/></div>
+    <div class="form-group"><label>Google API Key</label><input type="text" id="setup-api-key" placeholder="Paste your API key"/><span class="form-hint"><a href="setup-guide.html" target="_blank">How to get this →</a></span></div>
+    <div class="form-group"><label>Google Client ID (for write-back)</label><input type="text" id="setup-client-id" placeholder="Paste your OAuth Client ID"/><span class="form-hint">Optional — needed to auto-update your sheet</span></div>
+    <button class="btn-primary" onclick="saveSetup()">Connect sheet</button>
+    <p class="setup-note">Your settings are saved only in your browser.</p>
+  </div>
+</div>
+
+<!-- AUTH -->
+<div id="auth-screen" class="screen hidden">
+  <div class="setup-card">
+    <div class="setup-logo">🔐</div>
+    <h1>Enable write-back</h1>
+    <p class="setup-sub">Sign in with Google so the app can update your sheet automatically when you log calls.</p>
+    <button class="btn-google" onclick="signInGoogle()">
+      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 6.293C4.672 4.166 6.656 3.58 9 3.58z"/></svg>
+      Sign in with Google
+    </button>
+    <button class="btn-skip" onclick="skipAuth()">Continue without write-back (read only)</button>
+    <p class="setup-note">Without write-back the app still works — you just update the sheet manually at end of day.</p>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="main-app" class="screen hidden">
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="app-title">📞 Caller Dashboard</span>
+      <span class="rep-badge" id="rep-name-badge"></span>
+    </div>
+    <div class="topbar-right">
+      <span class="today-date" id="today-date"></span>
+      <button class="btn-refresh" onclick="clearTodayLogs()">🗑 Clear today</button>
+      <button class="btn-refresh" onclick="loadSheet()">↻ Refresh</button>
+      <button class="btn-eod" onclick="showEOD()">End of day report</button>
+      <button class="btn-icon" onclick="showSettings()" title="Settings">⚙️</button>
+    </div>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat-item"><span class="stat-val" id="stat-dials">0</span><span class="stat-label">Total dials</span></div>
+    <div class="stat-item"><span class="stat-val success" id="stat-reached">0</span><span class="stat-label">Banks reached</span></div>
+    <div class="stat-item"><span class="stat-val info" id="stat-connects">0</span><span class="stat-label">→ Tressika</span></div>
+    <div class="stat-item"><span class="stat-val danger" id="stat-sos">0</span><span class="stat-label">SOS flags</span></div>
+    <div class="stat-item"><span class="stat-val danger" id="stat-declined">0</span><span class="stat-label">Declined</span></div>
+    <div class="stat-item"><span class="stat-val" id="stat-total">0</span><span class="stat-label">Active banks</span></div>
+  </div>
+
+  <div class="filter-bar">
+    <input type="text" id="search-input" placeholder="🔍  Search bank name..." oninput="filterBanks()"/>
+    <select id="filter-state" onchange="filterBanks()"><option value="">All states</option></select>
+    <select id="filter-status" onchange="filterBanks()">
+      <option value="">All active banks</option>
+      <option value="sos">SOS flagged</option>
+      <option value="interest">Expressed interest</option>
+      <option value="connect">Ready for Tressika</option>
+      <option value="called-today">Called today</option>
+      <option value="not-called-today">Not called today</option>
+      <option value="attention">⚠️ Needs attention</option>
+      <option value="declined">Declined banks</option>
+    </select>
+    <span class="filter-count" id="filter-count"></span>
+  </div>
+
+  <div id="bank-list" class="bank-list"></div>
+</div>
+
+<!-- LOG MODAL -->
+<div id="log-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <div><div class="modal-title" id="modal-title"></div><div class="modal-sub" id="modal-sub"></div></div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- FLAG SECTION -->
+      <div id="flag-section" class="hidden">
+        <div class="form-group">
+          <label>What is wrong with this number?</label>
+          <select id="log-flag-issue"></select>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-sos-flag" onclick="saveFlagEntry()">⚠️ Confirm flag</button>
+          <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+        </div>
+      </div>
+
+      <!-- LOG SECTION -->
+      <div id="log-section">
+        <div class="log-form-grid">
+          <div class="form-group"><label>Who answered</label><select id="log-who-answered"></select></div>
+          <div class="form-group"><label>Outcome</label><select id="log-outcome"></select></div>
+          <div class="form-group"><label>Name spoken to (if new)</label><input type="text" id="log-spoke-to" placeholder="e.g. Chloe - receptionist"/></div>
+          <div class="form-group"><label>New number captured</label><input type="text" id="log-new-number" placeholder="e.g. 330-674-0001"/></div>
+        </div>
+        <div class="form-group"><label>Notes</label><textarea id="log-notes" placeholder="What happened? Date/time stamps automatically." rows="3"></textarea></div>
+        <div id="sos-warning" class="sos-warning hidden"></div>
+        <div id="decline-warning" class="decline-warning hidden">🚫 Selecting Decline will stop ALL calling at this bank across all leads.</div>
+        <div class="modal-actions">
+          <button class="btn-primary" onclick="saveCallLog()">Save log</button>
+          <button class="btn-tressika hidden" id="btn-tressika" onclick="flagForTressika()">✅ Pass to Tressika</button>
+          <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- EOD MODAL -->
+<div id="eod-modal" class="modal-overlay hidden">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <div><div class="modal-title">End of day report</div><div class="modal-sub" id="eod-date"></div></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn-copy-email" onclick="copyEOD()">📋 Copy email</button>
+        <button class="modal-close" onclick="closeEOD()">✕</button>
+      </div>
+    </div>
+    <div id="eod-content" class="eod-content"></div>
+  </div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div id="settings-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Settings</div>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group"><label>Your name</label><input type="text" id="settings-rep-name"/></div>
+      <div class="form-group"><label>Google Sheet ID</label><input type="text" id="settings-sheet-id"/></div>
+      <div class="form-group"><label>Tab name</label><input type="text" id="settings-tab-name"/></div>
+      <div class="form-group"><label>Google API Key</label><input type="text" id="settings-api-key"/></div>
+      <div class="form-group"><label>Tressika email</label><input type="text" id="settings-tressika-email" placeholder="tressika@bocaimpact.com"/></div>
+      <div class="form-group"><label>Team email</label><input type="text" id="settings-team-email" placeholder="team@bocaimpact.com"/></div>
+      <div class="form-group"><label>Google Client ID</label><input type="text" id="settings-client-id" placeholder="Paste your OAuth Client ID"/></div>
+      <div style="display:flex;gap:8px;margin-top:1rem;">
+        <button class="btn-primary" onclick="saveSettings()">Save</button>
+        <button class="btn-secondary" onclick="closeSettings()">Cancel</button>
+      </div>
+      <div class="settings-auth-section">
+        <div class="auth-status-text" id="auth-status">● Not signed in — read only mode</div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="btn-signin-sm" id="btn-signin-settings" onclick="signInFromSettings()">Sign in with Google</button>
+          <button class="btn-signout hidden" id="btn-signout" onclick="signOut()">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>
