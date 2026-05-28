@@ -457,7 +457,7 @@ function buildLeadCard(ri,d,role){
       phones.map((ph,pi)=>{
         const flagged=isPhoneFlagged(ri,role,ph);
         const issue=flagged?getBadNumberIssue(ri,role,ph):'';
-        return `<div class="lead-phone-row">
+        return `<div class="lead-phone-row" data-phone="${esc(ph)}">
           <div style="flex:1;min-width:0;">
             <span class="lead-phone-num${flagged?' bad':''}">${esc(ph)}</span>
             ${flagged&&issue?`<span class="bad-reason">${esc(issue)}</span>`:''}
@@ -465,8 +465,8 @@ function buildLeadCard(ri,d,role){
           <div class="lead-phone-btns">
             <button class="btn-copy-sm" onclick="copyPhone('${esc(ph)}',this)" title="Copy">📋</button>
             ${flagged
-              ?`<button class="btn-undo-flag" onclick="undoFlag(${ri},'${role}','${esc(ph)}')">↩ Undo</button>`
-              :`<button class="btn-sos-sm" onclick="openFlagModal(${ri},'${role}','${esc(ph)}')" title="Flag bad number">⚠️</button>`
+              ?`<button class="btn-undo-flag" onclick="undoFlagByIndex(${ri},'${role}',${pi})">↩ Undo</button>`
+              :`<button class="btn-sos-sm" onclick="openFlagModalByIndex(${ri},'${role}',${pi})" title="Flag bad number">⚠️</button>`
             }
             ${!declined?`<button class="btn-log-sm" onclick="openLogModal(${ri},'${role}',${pi})">Log</button>`:''}
           </div>
@@ -539,6 +539,22 @@ function copyPhone(phone,btn){
     const o=btn.textContent; btn.textContent='✓';
     setTimeout(()=>btn.textContent=o,1500);
   });
+}
+
+function openFlagModalByIndex(ri, role, phoneIndex){
+  const bank=banks.find(b=>b._rowIndex===ri);
+  if(!bank) return;
+  const phones=parsePhones(bank.data[CD[role].phone]);
+  const phone=phones[phoneIndex]||'';
+  openFlagModal(ri, role, phone);
+}
+
+function undoFlagByIndex(ri, role, phoneIndex){
+  const bank=banks.find(b=>b._rowIndex===ri);
+  if(!bank) return;
+  const phones=parsePhones(bank.data[CD[role].phone]);
+  const phone=phones[phoneIndex]||'';
+  undoFlag(ri, role, phone);
 }
 
 // ── FLAG MODAL (bad number) ───────────────
